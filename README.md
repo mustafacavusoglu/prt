@@ -83,5 +83,5 @@ Ad değiştirmek için:
    go install .
    ```
 
-Bu şekilde hem `--help` çıktısında görünen komut adı hem de global binary adı senin belirlediğin isim olur.
+Bu şekilde hem `--help` çıktısında görünen komut adı hem de global binary adı senin belirlediğin isim olur. 
 
