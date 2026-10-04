@@ -51,8 +51,10 @@ func newFake(ls ...port.Listener) *fakeSystem {
 	return f
 }
 
+// listener çalıştıran kullanıcıya ait bir kayıt üretir; böylece testler root olsun
+// olmasın aynı davranır (list/interactive varsayılan olarak yalnızca kendi süreçlerini gösterir).
 func listener(pid int, name string, p int) port.Listener {
-	return port.Listener{PID: pid, Command: name, User: "u", UID: 1000, Port: p, Proto: "tcp", Addresses: []string{"127.0.0.1"}}
+	return port.Listener{PID: pid, Command: name, User: "u", UID: os.Getuid(), Port: p, Proto: "tcp", Addresses: []string{"127.0.0.1"}}
 }
 
 func execute(t *testing.T, stdin string, args ...string) (stdout, stderr string, err error) {
@@ -319,6 +321,27 @@ func TestListFilteringAndJSON(t *testing.T) {
 	}
 	if out := run("--json", "-n", "nginx"); !strings.Contains(out, `"process": "nginx"`) || !strings.Contains(out, `"exposed": true`) {
 		t.Errorf("JSON:\n%s", out)
+	}
+}
+
+func TestRestrictToUser(t *testing.T) {
+	mine := listener(1, "mine", 1000)
+	other := listener(2, "other", 2000)
+	other.UID = os.Getuid() + 1
+	ls := []port.Listener{mine, other}
+
+	if got, hidden := restrictToUser(ls, true); len(got) != 2 || hidden != 0 {
+		t.Errorf("--all: got %d, hidden %d", len(got), hidden)
+	}
+	got, hidden := restrictToUser(ls, false)
+	if os.Getuid() <= 0 { // root ve Windows her şeyi görür
+		if len(got) != 2 || hidden != 0 {
+			t.Errorf("root: got %d, hidden %d", len(got), hidden)
+		}
+		return
+	}
+	if len(got) != 1 || got[0].PID != 1 || hidden != 1 {
+		t.Errorf("got %+v, hidden %d", got, hidden)
 	}
 }
 
