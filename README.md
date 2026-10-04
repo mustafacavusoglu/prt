@@ -1,87 +1,135 @@
-# `prt` - Açık Portları Listele ve Kapat
+# `prt` — Açık Portları Listele ve Kapat
 
-`prt`, sistemde dinlenen (LISTEN) açık TCP portlarını hızlıca listelemek ve istenen porttaki süreci kapatmak için basit bir CLI aracıdır. Özellikle “Redis/Postgres gibi servisleri açıkta unutuyorum” senaryolarında iş görür.
+[English](README.en.md)
+
+`prt`, sistemde dinlenen TCP/UDP portlarını ve onları açan süreçleri hızlıca gösteren, istediğini güvenle kapatan küçük bir CLI aracıdır. “Redis/Postgres’i açıkta unuttum” senaryosu için tasarlandı.
+
+- **Hızlı:** Linux’ta `lsof`’a ihtiyaç duymadan doğrudan `/proc` okur; macOS’ta tüm süreç bilgilerini toplu (tek `lsof`/`ps`/`launchctl` çağrısıyla) toplar.
+- **Güvenli:** onay ister, ne kapatılacağını gösterir, PID 1/kendi sürecini/`sshd`/`systemd`/`launchd` gibi sistem süreçlerini reddeder, sinyalden sonra sürecin gerçekten kapandığını doğrular.
+- **Kullanımı kolay:** interaktif seçim modu, port aralıkları, filtreler, `--json`, kabuk tamamlama.
+- **Dikkat çekici:** ağdan erişilebilen (`0.0.0.0`/LAN) portlar sarı renkle işaretlenir; `--exposed` ile yalnızca onlar listelenir.
 
 ## Destek
 
-- macOS ve Linux: desteklenir (listeleme için `lsof` kullanır)
-- Windows: bu sürüm desteklemez (bu aracın yaptığı port taraması/kill işlemleri burada çalışmaz)
-
-> Not: Süreçleri kapatmak risklidir. Kullanmadan önce port numarasını ve süreci doğru doğruladığından emin ol.
+| Platform | Port tarama | Notlar |
+|---|---|---|
+| Linux | `/proc` (bağımlılık yok) | Başka kullanıcıların süreçleri için `sudo` gerekir |
+| macOS | `lsof` + `ps` | Homebrew servisleri `brew services stop` ile durdurulur |
+| Windows | `netstat` + `tasklist` | Kullanıcı/komut satırı/dizin bilgisi gösterilmez; kapatma `taskkill` ile yapılır |
 
 ## Kurulum
 
-### 1) Kaynaktan derle (önerilen)
-
 ```bash
-cd /path/to/network-app
-go install .
+# Kaynaktan (Go 1.24+)
+go install github.com/mustafacavusoglu/prt@latest
+
+# veya depoyu klonlayıp
+make install        # sürüm bilgisiyle kurar
+make build          # ./prt üretir
 ```
 
-Binary varsayılan olarak `prt` adıyla kurulur.
-
-Eğer komut bulunamadı hatası alırsan `$HOME/go/bin` PATH içinde olmayabilir:
+`prt` komutu bulunamazsa `$(go env GOPATH)/bin` dizinini PATH’e ekleyin:
 
 ```bash
-echo 'export PATH="$HOME/go/bin:$PATH"' >> ~/.zshrc
-source ~/.zshrc
+echo 'export PATH="$(go env GOPATH)/bin:$PATH"' >> ~/.zshrc && source ~/.zshrc
 ```
 
-### Gereksinimler
+Hazır binary’ler için [Releases](https://github.com/mustafacavusoglu/prt/releases) sayfasına bakın (GoReleaser ile `v*` etiketinde üretilir).
 
-- macOS: `lsof` genelde hazır gelir.
-- Linux: `lsof` kurulu olmalı (`sudo apt-get install lsof` gibi).
-- macOS’ta Homebrew ile yönetilen servisleri kapatmak için: servis Homebrew `brew services` ile çalışıyorsa, `prt kill` kapatmayı `brew services stop <servis>` üzerinden yapar.
+Kabuk tamamlama (port numaraları dinamik tamamlanır):
+
+```bash
+prt completion zsh  > "${fpath[1]}/_prt"        # zsh
+prt completion bash > /etc/bash_completion.d/prt # bash
+prt completion fish > ~/.config/fish/completions/prt.fish
+```
 
 ## Kullanım
 
-### Açık portları listele
+### Listele
 
 ```bash
-prt list
+prt list                       # kendi süreçlerinizin dinlediği portlar
+prt list 6379                  # belirli port(lar) / aralık: prt list 3000-3010,5432
+prt list --name redis          # süreç adı veya komut satırına göre ara
+prt list --exposed             # yalnızca ağdan erişilebilenler (0.0.0.0, LAN IP)
+prt list --all                 # diğer kullanıcıların süreçleri de (root’ta varsayılan)
+prt list --udp                 # UDP soketleri de
+prt list --wide                # çalışma süresi, çalışma dizini, tam komut satırı
+prt list --json | jq '.[] | select(.exposed) | .port'
 ```
 
-Çıktıda `PORT`, `PID`, `PROCESS`, `USER` ve (Homebrew ile yönetiliyorsa) `SERVICE` görürsün.
+Örnek çıktı:
 
-### Portu kapat
+```
+PORT    PROTO   PID    PROCESS        USER   ADDRESS     SERVICE
+5432    tcp     812    postgres       mus    127.0.0.1   brew:postgresql@16
+6379    tcp     1204   redis-server   mus    *           brew:redis      ← sarı: ağa açık
+8080    tcp     5531   node           mus    127.0.0.1   -
+
+Toplam: 3 port (1 tanesi ağa açık)
+```
+
+`ADDRESS` sütununda `*` “tüm arayüzler” demektir. Loopback (`127.0.0.1`, `::1`) dışındaki her adres “ağa açık” sayılır.
+
+### Kapat
 
 ```bash
-prt kill <port>
+prt kill 6379                  # SIGTERM + onay; kapandığını doğrular
+prt kill 3000 5432 8080        # birden fazla port
+prt kill 3000-3010 --yes       # aralık, onaysız
+prt kill 8080 --dry-run        # ne olacağını göster, hiçbir şey yapma
+prt kill 8080 -f               # SIGKILL
+prt kill 8080 -s HUP           # başka sinyal: TERM, KILL, HUP, INT
+prt kill 6379 --no-brew        # brew servisini atlayıp doğrudan sinyal gönder
 ```
 
-Varsayılan olarak kapatmadan önce onay sorar.
+- Bir port birden çok süreç tarafından tutuluyorsa (ör. nginx worker’ları) **hepsi** gösterilir ve birlikte kapatılır; aynı süreç birden çok portu tutuyorsa tek kez kapatılır.
+- Süreç `--timeout` (varsayılan 3 sn) içinde kapanmazsa uyarılır: `prt kill 8080 -f`.
+- Onay sorulduktan sonra süreç hâlâ o portu dinliyor mu yeniden kontrol edilir (PID yeniden kullanımına karşı).
+- Linux’ta başka kullanıcıya ait portlar `PID -` olarak görünür; kapatmak için `sudo prt kill <port>`.
+- Korumalı süreçler (PID 1, `prt`’nin kendisi: asla; `sshd`, `systemd`, `launchd`, `dockerd`…: `--unsafe` ile) reddedilir.
 
-Zorla kapat (SIGKILL):
+### İnteraktif mod
 
 ```bash
-prt kill <port> -f
+prt                            # terminalde argümansız çalıştırınca
+prt interactive                # (kısa: prt i)
 ```
 
-## `prt` yerine başka isim kullanmak istiyorum
+Portlar numaralı listelenir; `1,3` veya `2-4` yazarak kapatılacakları seçersiniz, ardından onay istenir.
 
-İki pratik yol var:
+### Çıkış kodları
 
-### 1) Sadece binary adını değiştirmek (en basit)
+| Kod | Anlamı |
+|---|---|
+| 0 | Başarılı |
+| 1 | Genel hata (geçersiz argüman vb.) |
+| 2 | Port üzerinde dinleyen süreç bulunamadı |
+| 3 | Yetki yok (sudo gerekir) |
+| 4 | Kullanıcı onay vermedi / onay alınamadı |
+| 5 | Sinyal gönderildi ama süreç kapanmadı |
+
+Etkileşimsiz ortamda (CI, cron) onay istenemeyeceği için `--yes` kullanın. Renkleri `--no-color` veya `NO_COLOR=1` kapatır.
+
+## Geliştirme
 
 ```bash
-go build -o myname .
-./myname list
-./myname kill 6379
+make test      # go test -race ./...
+make lint      # vet (linux/darwin/windows) + gofmt kontrolü
+make cover     # kapsam özeti
 ```
 
-### 2) CLI ismini ve global install adını değiştirmek (kalıcı)
+Yapı: `cmd/` cobra komutları ve çıktı biçimi, `internal/port/` platforma özel tarama ve süreç sonlandırma (`scan_linux.go`, `scan_lsof.go`, `scan_windows.go`). Çıktı ayrıştırıcıları platformdan bağımsız dosyalardadır, böylece her platformun testi her yerde çalışır.
 
-`go install .` ile global kurulum binary adını modül yolunun son parçasından alır.
+Sürüm çıkarmak için `git tag v0.1.0 && git push --tags` yeterli; GitHub Actions binary’leri üretip Releases’e yükler. Homebrew için `.goreleaser.yaml` içindeki `brews` bloğunu etkinleştirin (önce `homebrew-tap` reposunu açın).
 
-Ad değiştirmek için:
+> Süreçleri kapatmak risklidir. Kapatmadan önce portu ve süreci doğrulayın.
 
-1. `go.mod` dosyasındaki `module ...` satırını kendi isim/namespace’inle değiştir.
-   - Örn: `module github.com/kullanici/myname`
-2. `cmd/root.go` içinde `Use: "prt"` değerini istediğin isimle güncelle.
-3. Sonra tekrar:
-   ```bash
-   go install .
-   ```
+## `prt` yerine başka isim
 
-Bu şekilde hem `--help` çıktısında görünen komut adı hem de global binary adı senin belirlediğin isim olur. 
+Binary adını değiştirmek için `go build -o myname .` yeterlidir. Kalıcı olarak değiştirmek için `go.mod`’daki `module` satırını, import yollarını ve `cmd/root.go` içindeki `Use: "prt"` değerini güncelleyin.
 
+## Lisans
+
+[MIT](LICENSE)
