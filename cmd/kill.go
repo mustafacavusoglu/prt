@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -77,18 +78,28 @@ brew servisi olarak çalışan süreçler 'brew services stop' ile durdurulur.`,
 
 func init() { rootCmd.AddCommand(newKillCmd()) }
 
-func completePorts(_ *cobra.Command, _ []string, _ string) ([]string, cobra.ShellCompDirective) {
-	ls, err := scanFn(port.ScanOptions{UDP: true})
+// completePorts kill için port önerir. Tamamlama her TAB'da çalıştığından hızlı olmalı:
+// yalnızca TCP taranır; kapatılamayacak (PID bilinmeyen) kayıtlar, başka kullanıcıların
+// süreçleri ve komut satırında zaten yazılmış portlar önerilmez.
+func completePorts(_ *cobra.Command, args []string, toComplete string) ([]string, cobra.ShellCompDirective) {
+	ls, err := scanFn(port.ScanOptions{})
 	if err != nil {
 		return nil, cobra.ShellCompDirectiveNoFileComp
+	}
+	ls, _ = restrictToUser(ls, false)
+	typed := map[string]bool{}
+	for _, a := range args {
+		typed[a] = true
 	}
 	var out []string
 	seen := map[int]bool{}
 	for _, l := range ls {
-		if !seen[l.Port] {
-			seen[l.Port] = true
-			out = append(out, fmt.Sprintf("%d\t%s", l.Port, l.Command))
+		num := strconv.Itoa(l.Port)
+		if l.PID == 0 || seen[l.Port] || typed[num] || !strings.HasPrefix(num, toComplete) {
+			continue
 		}
+		seen[l.Port] = true
+		out = append(out, fmt.Sprintf("%s\t%s (PID %d)", num, l.Command, l.PID))
 	}
 	return out, cobra.ShellCompDirectiveNoFileComp
 }

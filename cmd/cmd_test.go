@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/mustafacavusoglu/prt/internal/port"
+	"github.com/spf13/cobra"
 )
 
 // fakeSystem scan/terminate/alive/brew/still işlevlerini değiştirir ve çağrıları kaydeder.
@@ -342,6 +343,25 @@ func TestRestrictToUser(t *testing.T) {
 	}
 	if len(got) != 1 || got[0].PID != 1 || hidden != 1 {
 		t.Errorf("got %+v, hidden %d", got, hidden)
+	}
+}
+
+func TestCompletePorts(t *testing.T) {
+	hidden := listener(0, "-", 2024)
+	newFake(listener(100, "redis-server", 6379), listener(200, "node", 3000), listener(201, "node", 3001), hidden)
+
+	got, dir := completePorts(nil, nil, "")
+	if dir != cobra.ShellCompDirectiveNoFileComp {
+		t.Errorf("directive = %v", dir)
+	}
+	if len(got) != 3 || strings.Contains(strings.Join(got, "|"), "2024") {
+		t.Errorf("tümü: %q (PID 0 kaydı olmamalı)", got)
+	}
+	if got, _ := completePorts(nil, nil, "30"); len(got) != 2 {
+		t.Errorf("önek filtresi: %q", got)
+	}
+	if got, _ := completePorts(nil, []string{"3000"}, ""); len(got) != 2 || strings.Contains(strings.Join(got, "|"), "3000\t") {
+		t.Errorf("yazılmış port tekrar önerilmemeli: %q", got)
 	}
 }
 
