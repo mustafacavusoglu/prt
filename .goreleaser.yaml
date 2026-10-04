@@ -1,0 +1,47 @@
+version: 2
+
+before:
+  hooks:
+    - go mod tidy
+    - go test ./...
+
+builds:
+  - id: prt
+    main: .
+    binary: prt
+    env: [CGO_ENABLED=0]
+    goos: [linux, darwin, windows]
+    goarch: [amd64, arm64]
+    ldflags:
+      - -s -w -X github.com/mustafacavusoglu/prt/cmd.version={{ .Version }}
+
+archives:
+  - formats: [tar.gz]
+    name_template: "prt_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    format_overrides:
+      - goos: windows
+        formats: [zip]
+    files: [LICENSE, README.md, README.en.md]
+
+checksum:
+  name_template: checksums.txt
+
+changelog:
+  sort: asc
+  filters:
+    exclude: ["^docs:", "^test:", "^chore:"]
+
+# Homebrew: önce `mustafacavusoglu/homebrew-tap` reposunu oluşturun, sonra bu bloğun
+# yorumunu kaldırın ve release.yml'deki HOMEBREW_TAP_GITHUB_TOKEN satırını açın.
+# brews:
+#   - name: prt
+#     repository:
+#       owner: mustafacavusoglu
+#       name: homebrew-tap
+#       token: "{{ .Env.HOMEBREW_TAP_GITHUB_TOKEN }}"
+#     homepage: https://github.com/mustafacavusoglu/prt
+#     description: "Açık TCP/UDP portlarını listele ve kapat"
+#     license: MIT
+#     dependencies: []
+#     test: |
+#       system "#{bin}/prt", "--version"
