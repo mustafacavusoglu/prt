@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -15,10 +16,11 @@ import (
 
 // Platform bağımlı işlemler; testlerde sahteleriyle değiştirilir.
 var (
-	terminateFn = port.Terminate
-	aliveFn     = port.IsAlive
-	brewStopFn  = port.StopBrewService
-	stillFn     = port.StillListening
+	terminateFn  = port.Terminate
+	aliveFn      = port.IsAlive
+	brewStopFn   = port.StopBrewService
+	dockerStopFn = port.StopContainer
+	stillFn      = port.StillListening
 )
 
 // Sistem servisini yanlışlıkla kapatmayı önlemek için varsayılan olarak reddedilen süreçler.
@@ -131,9 +133,11 @@ func runKill(cmd *cobra.Command, in *bufio.Reader, args []string, o killOptions)
 	return killListeners(cmd, in, targets, o)
 }
 
-// group aynı PID'ye ait dinleyicileri toplar; bir süreç birden çok portu tutabilir.
+// group aynı PID'ye (ve konteynere) ait dinleyicileri toplar; bir süreç birden çok portu tutabilir.
+// Docker yönlendiricisi tek PID'yle birçok konteynerin portunu tuttuğundan konteyner de anahtara girer.
 type group struct {
 	pid       int
+	container string
 	listeners []port.Listener
 }
 
@@ -148,14 +152,19 @@ func (g group) portList() string {
 }
 
 func groupByPID(ls []port.Listener) []group {
+	type key struct {
+		pid       int
+		container string
+	}
 	var groups []group
-	idx := map[int]int{}
+	idx := map[key]int{}
 	for _, l := range ls {
-		i, ok := idx[l.PID]
+		k := key{l.PID, l.Container}
+		i, ok := idx[k]
 		if !ok {
 			i = len(groups)
-			idx[l.PID] = i
-			groups = append(groups, group{pid: l.PID})
+			idx[k] = i
+			groups = append(groups, group{pid: l.PID, container: l.Container})
 		}
 		groups[i].listeners = append(groups[i].listeners, l)
 	}
@@ -208,6 +217,9 @@ func killListeners(cmd *cobra.Command, in *bufio.Reader, targets []port.Listener
 			blocked = append(blocked, fmt.Sprintf("%s portunu tutan süreç görülemiyor (başka kullanıcıya ait olabilir)", g.portList()))
 		case neverKill(l):
 			blocked = append(blocked, fmt.Sprintf("PID %d (%s) hiçbir koşulda kapatılamaz", g.pid, l.Command))
+		case port.IsDockerForwarder(l) && g.container == "" && !o.unsafe:
+			blocked = append(blocked, fmt.Sprintf("%s portunu PID %d (%s) Docker/OrbStack yönlendiricisi tutuyor ama yayınlayan konteyner bulunamadı; "+
+				"bu süreci kapatmak tüm konteynerleri durdurur (yine de istiyorsanız --unsafe)", g.portList(), g.pid, l.Command))
 		case isProtected(l) && !o.unsafe:
 			blocked = append(blocked, fmt.Sprintf("PID %d (%s) korumalı bir süreç; yine de kapatmak için --unsafe kullanın", g.pid, l.Command))
 		default:
@@ -225,7 +237,18 @@ func killListeners(cmd *cobra.Command, in *bufio.Reader, targets []port.Listener
 	}
 
 	// 2) Ne olacağını göster.
-	brewMode := func(l port.Listener) bool { return l.BrewService != "" && !o.noBrew }
+	brewMode := func(l port.Listener) bool { return l.Container == "" && l.BrewService != "" && !o.noBrew }
+	// action sinyal yerine çalıştırılacak komutu ya da gönderilecek sinyali döndürür.
+	action := func(l port.Listener) string {
+		switch {
+		case l.Container != "":
+			return "docker stop " + l.Container
+		case brewMode(l):
+			return "brew services stop " + l.BrewService
+		}
+		return sig.String()
+	}
+	var actions []string
 	for _, g := range groups {
 		l := g.first()
 		fmt.Fprintf(out, "• %s (PID %d, kullanıcı: %s) — %s\n", p.bold(l.Command), g.pid, l.User, g.portList())
@@ -235,16 +258,25 @@ func killListeners(cmd *cobra.Command, in *bufio.Reader, targets []port.Listener
 		if l.Exposed {
 			fmt.Fprintln(out, "  "+p.yellow("⚠ ağdan erişilebilir ("+strings.Join(l.Addresses, ", ")+")"))
 		}
-		if brewMode(l) {
+		switch {
+		case l.Container != "":
+			fmt.Fprintf(out, "  Docker konteyneri %s → docker stop %s\n", l.Container, l.Container)
+			if o.force || o.signal != "" {
+				fmt.Fprintln(out, "  (konteynerlerde sinyal seçimi yok sayılır)")
+			}
+		case brewMode(l):
 			fmt.Fprintf(out, "  brew servisi olarak yönetiliyor → brew services stop %s\n", l.BrewService)
 			if o.force || o.signal != "" {
 				fmt.Fprintln(out, "  (brew servislerinde sinyal seçimi yok sayılır; doğrudan sinyal için --no-brew)")
 			}
 		}
+		if a := action(l); !slices.Contains(actions, a) {
+			actions = append(actions, a)
+		}
 	}
 
 	if o.dryRun {
-		fmt.Fprintf(out, "\nKuru çalıştırma: %d süreç kapatılacaktı (%s). Hiçbir şey yapılmadı.\n", len(groups), sig)
+		fmt.Fprintf(out, "\nKuru çalıştırma: %d süreç kapatılacaktı (%s). Hiçbir şey yapılmadı.\n", len(groups), strings.Join(actions, ", "))
 		return nil
 	}
 
@@ -273,9 +305,16 @@ func killListeners(cmd *cobra.Command, in *bufio.Reader, targets []port.Listener
 			continue
 		}
 		var err error
-		if brewMode(l) {
+		switch {
+		case g.container != "":
+			// Yönlendirici süreç yaşamaya devam eder; docker stop döndüğünde konteyner durmuştur.
+			if err = dockerStopFn(g.container); err == nil {
+				fmt.Fprintf(out, "%s %s konteyneri durduruldu (docker stop %s) — %s\n", p.green("✓"), g.container, g.container, g.portList())
+				continue
+			}
+		case brewMode(l):
 			err = brewStopFn(l.BrewService)
-		} else {
+		default:
 			err = terminateFn(g.pid, sig)
 		}
 		switch {

@@ -16,13 +16,14 @@ import (
 
 // fakeSystem scan/terminate/alive/brew/still işlevlerini değiştirir ve çağrıları kaydeder.
 type fakeSystem struct {
-	listeners  []port.Listener
-	terminated []string // "pid:SIG"
-	brewStops  []string
-	ignoreTERM map[int]bool // true ise süreç SIGTERM'e rağmen yaşar
-	termErr    map[int]error
-	dead       map[int]bool
-	gone       map[int]bool // artık dinlemiyor
+	listeners   []port.Listener
+	terminated  []string // "pid:SIG"
+	brewStops   []string
+	dockerStops []string
+	ignoreTERM  map[int]bool // true ise süreç SIGTERM'e rağmen yaşar
+	termErr     map[int]error
+	dead        map[int]bool
+	gone        map[int]bool // artık dinlemiyor
 }
 
 func newFake(ls ...port.Listener) *fakeSystem {
@@ -46,6 +47,10 @@ func newFake(ls ...port.Listener) *fakeSystem {
 				f.dead[l.PID] = true
 			}
 		}
+		return nil
+	}
+	dockerStopFn = func(name string) error {
+		f.dockerStops = append(f.dockerStops, name)
 		return nil
 	}
 	stillFn = func(l port.Listener) bool { return !f.gone[l.PID] }
@@ -243,6 +248,58 @@ func TestKillBrewService(t *testing.T) {
 	}
 	if len(f.brewStops) != 0 || len(f.terminated) != 1 {
 		t.Errorf("--no-brew: brew=%v term=%v", f.brewStops, f.terminated)
+	}
+}
+
+func TestKillDockerContainer(t *testing.T) {
+	// OrbStack tek PID'yle hem konteyner portlarını hem kendi portunu tutar.
+	web := listener(300, "OrbStack Helper", 8080)
+	web.Container = "release-summarizer"
+	db := listener(300, "OrbStack Helper", 5433)
+	db.Container = "litellm-postgres"
+	own := listener(300, "OrbStack Helper", 32222)
+
+	f := newFake(web, db, own)
+	out, _, err := execute(t, "", "8080", "5433", "--dry-run")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out, "docker stop release-summarizer, docker stop litellm-postgres") || strings.Contains(out, "SIGTERM") {
+		t.Errorf("dry-run çıktısı:\n%s", out)
+	}
+
+	if _, _, err := execute(t, "", "8080", "5433", "-y"); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(f.dockerStops, []string{"release-summarizer", "litellm-postgres"}) || len(f.terminated) != 0 {
+		t.Errorf("docker=%v term=%v", f.dockerStops, f.terminated)
+	}
+
+	// Konteyneri olmayan yönlendirici portu: yardımcı süreci asla öldürme.
+	f = newFake(web, own)
+	_, errOut, err := execute(t, "", "32222", "-y")
+	if err == nil || len(f.terminated) != 0 || len(f.dockerStops) != 0 {
+		t.Errorf("err=%v term=%v docker=%v", err, f.terminated, f.dockerStops)
+	}
+	if !strings.Contains(errOut, "konteyner bulunamadı") {
+		t.Errorf("stderr: %s", errOut)
+	}
+}
+
+func TestKillBrewDryRun(t *testing.T) {
+	pg := listener(400, "postgres", 5432)
+	pg.BrewService = "postgresql@17"
+	newFake(pg)
+	out, _, err := execute(t, "", "5432", "--dry-run")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out, "(brew services stop postgresql@17)") || strings.Contains(out, "SIGTERM") {
+		t.Errorf("dry-run çıktısı:\n%s", out)
+	}
+	out, _, _ = execute(t, "", "5432", "--dry-run", "--no-brew")
+	if !strings.Contains(out, "(SIGTERM)") {
+		t.Errorf("--no-brew dry-run çıktısı:\n%s", out)
 	}
 }
 

@@ -87,7 +87,7 @@ func (f Filter) Match(l Listener) bool {
 	}
 	if f.Name != "" {
 		n := strings.ToLower(f.Name)
-		hay := strings.ToLower(l.Command + "\x00" + l.Args + "\x00" + l.BrewService)
+		hay := strings.ToLower(l.Command + "\x00" + l.Args + "\x00" + l.BrewService + "\x00" + l.Container)
 		if !strings.Contains(hay, n) {
 			return false
 		}

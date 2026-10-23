@@ -64,11 +64,30 @@ func TestParseLaunchctl(t *testing.T) {
 	out := "PID\tStatus\tLabel\n" +
 		"812\t0\thomebrew.mxcl.redis\n" +
 		"-\t0\thomebrew.mxcl.postgresql@16\n" +
+		"901\t0\tsh.brew.postgresql@17\n" +
+		"902\t0\tsh.brew.\n" +
 		"340\t0\tcom.apple.Finder\n"
 	got := parseLaunchctl(out)
-	want := map[int]string{812: "redis"}
+	want := map[int]string{812: "redis", 901: "postgresql@17"}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("got %v; want %v", got, want)
+	}
+}
+
+func TestParseDockerPorts(t *testing.T) {
+	out := "release-summarizer\t0.0.0.0:8080->8000/tcp, [::]:8080->8000/tcp\n" +
+		"dns\t127.0.0.1:9000-9001->53/udp\n" +
+		"redis\t6379/tcp\n" +
+		"stopped\t\n"
+	got := parseDockerPorts(out)
+	want := map[string]string{"8080/tcp": "release-summarizer", "9000/udp": "dns", "9001/udp": "dns"}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("got %v; want %v", got, want)
+	}
+	for cmd, want := range map[string]bool{"OrbStack Helper": true, "com.docker.backend.exe": true, "vpnkit": true, "postgres": false} {
+		if IsDockerForwarder(Listener{Command: cmd}) != want {
+			t.Errorf("IsDockerForwarder(%q) != %v", cmd, want)
+		}
 	}
 }
 

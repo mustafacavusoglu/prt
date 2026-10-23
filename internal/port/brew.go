@@ -9,7 +9,9 @@ import (
 	"time"
 )
 
-const brewLabelPrefix = "homebrew.mxcl."
+// brewLabelPrefixes brew'in launchd etiket önekleridir: Homebrew 7+ "sh.brew.<formül>",
+// eski sürümler "homebrew.mxcl.<formül>" kullanır. Formül adı "postgresql@17" gibi sürümlü olabilir.
+var brewLabelPrefixes = []string{"sh.brew.", "homebrew.mxcl."}
 
 // parseLaunchctl, `launchctl list` çıktısından PID -> brew servis adı haritası çıkarır.
 // Satır biçimi: "PID<TAB>Status<TAB>Label"; çalışmayan servislerde PID "-" olur.
@@ -17,14 +19,19 @@ func parseLaunchctl(out string) map[int]string {
 	m := make(map[int]string)
 	for _, line := range strings.Split(out, "\n") {
 		f := strings.Fields(line)
-		if len(f) != 3 || !strings.HasPrefix(f[2], brewLabelPrefix) {
+		if len(f) != 3 {
 			continue
 		}
 		pid, err := strconv.Atoi(f[0])
 		if err != nil {
 			continue
 		}
-		m[pid] = strings.TrimPrefix(f[2], brewLabelPrefix)
+		for _, prefix := range brewLabelPrefixes {
+			if name, ok := strings.CutPrefix(f[2], prefix); ok && name != "" {
+				m[pid] = name
+				break
+			}
+		}
 	}
 	return m
 }

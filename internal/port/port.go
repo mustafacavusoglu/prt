@@ -23,6 +23,7 @@ type Listener struct {
 	Addresses   []string `json:"addresses"`
 	Exposed     bool     `json:"exposed"`
 	BrewService string   `json:"brew_service,omitempty"`
+	Container   string   `json:"container,omitempty"` // portu yayınlayan Docker konteyneri
 	Cwd         string   `json:"cwd,omitempty"`
 	UptimeSec   int64    `json:"uptime_seconds,omitempty"`
 }
@@ -48,7 +49,9 @@ func Scan(opts ScanOptions) ([]Listener, error) {
 	if err != nil {
 		return nil, err
 	}
-	return normalize(raw), nil
+	ls := normalize(raw)
+	annotateContainers(ls)
+	return ls, nil
 }
 
 // StillListening, l'deki PID'nin hâlâ aynı portu dinleyip dinlemediğini söyler.

@@ -66,7 +66,10 @@ func renderTable(w io.Writer, ls []port.Listener, o tableOptions) {
 			pid = fmt.Sprint(l.PID)
 		}
 		svc := "-"
-		if l.BrewService != "" {
+		switch {
+		case l.Container != "":
+			svc = "docker:" + l.Container
+		case l.BrewService != "":
 			svc = "brew:" + l.BrewService
 		}
 		row := []string{fmt.Sprint(l.Port), l.Proto, pid, l.Command, l.User, strings.Join(l.Addresses, ","), svc}
